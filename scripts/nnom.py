@@ -895,7 +895,6 @@ def generate_model(model, x_test, per_channel_quant=False, name='weights.h', for
             # test, multiple output layer
             
             print("LAYER: ",id, layer.name)
-            import pdb; pdb.set_trace()
             if id==0:
                 if (len(layer.node.outputs.shape) != 0):
                     continue
