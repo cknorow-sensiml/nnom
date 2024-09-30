@@ -31,10 +31,98 @@ model_reversion = 3
 #define NNOM_REVISION         3L              /**< revise version number */
 #define NNOM_VERSION          (NNOM_MAJORVERSION * 10000) + (NNOM_SUBVERSION * 100) + NNOM_REVISION)
 
+
+def get_input_layer_size(layer):
+    size=1
+    if hasattr(layer, 'input'):        
+        for s in layer.input.shape[1:]:
+            size *= s if s is not None else 1
+    elif hasattr(layer, 'get_shape'):
+        for s in layer.get_shape()[1:]:
+            size *= s if s is not None else 1
+            
+    return size
+        
+                    
+def is_batch_norm(layer):
+    return ('batch_normalization' in layer.name) or ('batch_norm' in layer.name)
+
+def is_activation_type(layer, activation_type):
+    return ('activation' in layer.name and layer.get_config()['activation'] == activation_type)
+
+def is_any_activation_type(layer, activation_types):
+    return any([is_activation_type(layer, x) for x in activation_types])
+
+def is_layer_type(layer, layer_types):
+    return any([x in layer.name for x in layer_types])
+
+def is_shift_layer(layer):
+    ''' layer which can change the output encoding'''
+    #FIXME: add more which will change the output shift
+    if(is_layer_type(layer, ['input','conv2d','conv1d','dense','softmax','sigmoid','tanh', 'subtract','multiply']) or
+        ('add' in layer.name and 'zero' not in layer.name) or # the name, zero_padding contains 'add'
+        is_any_activation_type(layer, ['softmax', 'sigmoid','hard_sigmoid','tanh','hard_tanh']) or
+        is_rnn_layer(layer)
+    ):
+        return True
+    return False
+
+
+def is_shift_fixed(layer):
+    ''' layer which shift to a fixed value'''
+    #FIXME: add more which will change the output shift
+    if('softmax' in layer.name or
+        'sigmoid' in layer.name or
+        'tanh' in layer.name or
+        is_any_activation_type(['softmax', 'sigmoid','hard_sigmoid','tanh','hard_tanh']) or
+        is_rnn_layer(layer)
+    ):
+        return True
+    return  False
+
+def is_lstm_layer(layer):
+    if type(layer) is LSTM or 'lstm' in layer.name:
+        return True
+    if(type(layer) is RNN or 'rnn' in layer.name):
+        if(type(layer.cell) is LSTMCell or 'lstm' in layer.cell.name):
+            return True
+    return False
+
+def is_gru_layer(layer):
+    if type(layer) is GRU or 'gru' in layer.name:
+        return True
+    if(type(layer) is RNN or 'rnn' in layer.name):
+        if(type(layer.cell) is GRUCell or 'gru' in layer.cell.name):
+            return True
+    return False
+
+def is_rnn_layer(layer):
+    if( 'rnn' in layer.name or
+        is_lstm_layer(layer) or
+        is_gru_layer(layer)
+    ):
+        return True
+    return  False
+
+def find_offset(data):
+    """
+    Offset of the original data before quantisation
+    :param data:
+    :return: offset of the data block
+    """
+    return np.average(data)
+
+def layer_name_from_tensor(t):
+    return t.name.replace(':','/').split('/')[0]
+
+def is_conv_layer(layer):
+    return 'conv' in layer.name
+
+
 def fuse_bn_to_conv(layer):
     # try to fuse BN layer to convolutional
     if ('conv' in layer.name) and \
-            ('batch_normalization' in layer.outbound_nodes[0].outbound_layer.name):
+            is_batch_norm(layer):
         print("fusing batch normalization to", layer.name)
         bn_layer = layer._outbound_nodes[0].outbound_layer
         c_w = layer.get_weights()[0]
@@ -131,77 +219,6 @@ def generate_test_bin(x, y, name='test_data_with_label.bin'):
     print("binary test file generated:", name)
     print("test data length:", test_label.size)
     return
-
-def is_shift_layer(layer):
-    ''' layer which can change the output encoding'''
-    #FIXME: add more which will change the output shift
-    if('input' in layer.name or
-       'conv2d' in layer.name or
-       'conv1d' in layer.name or
-       'dense' in layer.name or
-       'softmax' in layer.name or
-        'sigmoid' in layer.name or
-        'tanh' in layer.name or
-        ('add' in layer.name and 'zero' not in layer.name) or # the name, zero_padding contains 'add'
-        'subtract' in layer.name or
-        'multiply' in layer.name or
-       ('activation' in layer.name and layer.get_config()['activation'] == 'softmax')or
-        ('activation' in layer.name and layer.get_config()['activation'] == 'hard_sigmoid') or
-        ('activation' in layer.name and layer.get_config()['activation'] == 'tanh') or
-        ('activation' in layer.name and layer.get_config()['activation'] == 'hard_tanh') or
-        is_rnn_layer(layer)
-    ):
-        return True
-    return False
-
-def is_shift_fixed(layer):
-    ''' layer which shift to a fixed value'''
-    #FIXME: add more which will change the output shift
-    if('softmax' in layer.name or
-        'sigmoid' in layer.name or
-        'tanh' in layer.name or
-        ('activation' in layer.name and layer.get_config()['activation'] == 'softmax') or
-        ('activation' in layer.name and layer.get_config()['activation'] == 'sigmoid') or
-        ('activation' in layer.name and layer.get_config()['activation'] == 'hard_sigmoid') or
-        ('activation' in layer.name and layer.get_config()['activation'] == 'tanh') or
-        ('activation' in layer.name and layer.get_config()['activation'] == 'hard_tanh') or
-        is_rnn_layer(layer)
-    ):
-        return True
-    return  False
-
-def is_lstm_layer(layer):
-    if type(layer) is LSTM or 'lstm' in layer.name:
-        return True
-    if(type(layer) is RNN or 'rnn' in layer.name):
-        if(type(layer.cell) is LSTMCell or 'lstm' in layer.cell.name):
-            return True
-    return False
-
-def is_gru_layer(layer):
-    if type(layer) is GRU or 'gru' in layer.name:
-        return True
-    if(type(layer) is RNN or 'rnn' in layer.name):
-        if(type(layer.cell) is GRUCell or 'gru' in layer.cell.name):
-            return True
-    return False
-
-def is_rnn_layer(layer):
-    if( 'rnn' in layer.name or
-        is_lstm_layer(layer) or
-        is_gru_layer(layer)
-    ):
-        return True
-    return  False
-
-def find_offset(data):
-    """
-    Offset of the original data before quantisation
-    :param data:
-    :return: offset of the data block
-    """
-    return np.average(data)
-
 
 def find_dec_bits_max_min(data, bit_width=8, maximum_bit=32):
     """
@@ -472,6 +489,7 @@ def quantize_rnn_intermediate_output(layer, features):
         return [q_h, q_z]
     return []
 
+
 def quantize_output(model, x_test, quantize_method='max_min', layer_offset=False, calibrate_size=None):
     # limit the test data size
     if(calibrate_size is not None):
@@ -481,16 +499,17 @@ def quantize_output(model, x_test, quantize_method='max_min', layer_offset=False
     layer_q_list = {}
     # FIXME: only support one input
     if (type(model.layers[0]) != InputLayer):
+        #raise Exception("Initial model layer is not input layer")
         L = [model.input] + model.layers
     else:
         L = model.layers
 
-    for layer in L:  # layer loop
+    for cur_idx, layer in enumerate(L):  # layer loop
         if ("input" in layer.name):
             features = x_test
         else:
-            # rnn need a further step to determine the intermediate q format
-            if (is_rnn_layer(layer)):
+            # TODO FIX RNN rnn need a further step to determine the intermediate q format
+            """ if (is_rnn_layer(layer)):
                 in_layer = layer.inbound_nodes[0].inbound_layers
                 layer_model = Model(inputs=model.input, outputs=in_layer.output)
                 bs = model.input.shape[0]
@@ -498,11 +517,11 @@ def quantize_output(model, x_test, quantize_method='max_min', layer_offset=False
                 intermediate_dec = quantize_rnn_intermediate_output(layer, features)
                 print(layer.name, 'dec bit', intermediate_dec)
                 layer_q_list['intermediate_' + layer.name] = intermediate_dec
-
+            """
             # batch_normalization will need to be handled differently, since we are fusing the weight to its previosu conv.
             # sigmoid and tanh are different, their shift is fixed to 7
             if (is_shift_layer(layer) or
-                    ('batch_normalization' in layer.name)):
+                    is_batch_norm(layer)):
                 layer_model = Model(inputs=model.input, outputs=layer.output)
                 bs = model.input.shape[0]
                 features = layer_model.predict(x_test, batch_size=bs)
@@ -511,7 +530,7 @@ def quantize_output(model, x_test, quantize_method='max_min', layer_offset=False
                 pass
 
         # we currently only support one offset for a layer output.
-        if(layer_offset):
+        if(layer_offset): #false by default so ignore
             offset = find_offset(features)
             features = features - offset
         else:
@@ -533,8 +552,8 @@ def quantize_output(model, x_test, quantize_method='max_min', layer_offset=False
             layer_q_list[layer.name.split(':')[0]] = [dec_bits, offset]
         else:
             layer_q_list[layer.name] = [dec_bits, offset]
-        if ('batch_normalization' in layer.name):
-            layer_q_list[layer.inbound_nodes[0].inbound_layers.name] = [dec_bits, offset]  # use the bn layer shift to update the last layer.
+        if is_batch_norm(layer):
+            layer_q_list[model.layers[cur_idx-1].name] = [dec_bits, offset]  # use the bn layer shift to update the last layer.
 
     # scan the layers backward, try to unify the dec bit in multiple input layers, (add, mult... concat...etc.)
     LM = {}
@@ -582,9 +601,6 @@ def quantize_output(model, x_test, quantize_method='max_min', layer_offset=False
     return layer_q_list
 
 
-def layer_name_from_tensor(t):
-    return t.name.replace(':','/').split('/')[0]
-
 
 def quantize_weights(model, name='weights.h', format='hwc', per_channel_quant=True, layer_q_list=None):
     # Quantize weights to 8-bits using (min,max) and write to file
@@ -596,13 +612,12 @@ def quantize_weights(model, name='weights.h', format='hwc', per_channel_quant=Tr
         if (not layer.weights):
             continue
         # before merging bn layer, check if the bn is "legally" after Conv
-        if('batch_normalization' in layer.name) and \
-            ('conv' not in layer.inbound_nodes[0].inbound_layers.name):
+        if is_batch_norm(layer) and not is_conv_layer(model.layers[curr_idx-1]):
             raise  Exception('Only support batch_normalization placed after conv', layer.name,
-                            layer.inbound_nodes[0].inbound_layers.name)
+                            model.layers[curr_idx-1].name)
         # try to fuse BN layer to convolutional
-        if ('conv' in layer.name) and \
-            ('batch_normalization' in layer.outbound_nodes[0].outbound_layer.name):
+        if is_conv_layer(layer) and \
+            is_batch_norm(layer):
             fuse_bn_to_conv(layer)
         # generate weights and bias now
         weight_dec_shift = 0
@@ -822,13 +837,12 @@ def generate_model(model, x_test, per_channel_quant=False, name='weights.h', for
             if (type(layer) in [InputLayer] or 'input' in layer.name):
                 if(type(layer) == tf.Tensor):
                     raise  Exception('Not yet support tensor as input/or Sequential model. '
-                                     'please use Input layer as your first layer in the model', layer.name, layer)
-                size = 1
-                for s in layer.input.shape[1:]:
-                    size *= s if s is not None else 1
+                                     'please use Input layer as your first layer in the model', layer.name, layer)                
+                
+                size = get_input_layer_size(layer)
                 fp.write(gen_values('nnom_input_data', '{0}', size=str(size), dtype='static int8_t'))
-                fp.write(gen_tensor(layer.input, layer_q_list[layer.name][0], tensor_value='nnom_input_data', is_io_tensor=True))
-                fp.write(gen_io_config(layer, tensor_name=convert_tensor_name(layer.input)))
+                fp.write(gen_input_tensor(layer, layer_q_list[layer.name][0], tensor_value='nnom_input_data'))
+                fp.write(gen_io_config(layer, tensor_name=convert_tensor_name(layer)))
             elif (type(layer) in [Conv2D, Conv1D, DepthwiseConv2D]):
                 for w in layer.weights:
                     gen_weight_tensor(w, per_axis=per_channel_quant)
@@ -879,7 +893,25 @@ def generate_model(model, x_test, per_channel_quant=False, name='weights.h', for
                 fp.write(gen_rnn_config(layer))
 
             # test, multiple output layer
-            if(len(layer.outbound_nodes) == 0):
+            
+            print("LAYER: ",id, layer.name)
+            import pdb; pdb.set_trace()
+            if id==0:
+                if (len(layer.node.outputs.shape) != 0):
+                    continue
+                size=1
+                for s in layer.node.outputs.shape[1:]:
+                    size *= s if s is not None else 1
+                if(output_num == 0): # the first output or the only output
+                    fp.write(gen_values('nnom_output_data', '{0}', size=str(size), dtype='static int8_t'))
+                    fp.write(gen_output_config(layer, dec_bits=layer.name.upper() + '_OUTPUT_DEC', output_num=output_num, value_name='nnom_output_data'))
+                    output_num += 1
+                else:
+                    output_value_names = 'nnom_output_data'+str(output_num)
+                    fp.write(gen_values(output_value_names, '{0}', size=str(size), dtype='static int8_t'))
+                    fp.write(gen_output_config(layer, dec_bits=layer.name.upper() + '_OUTPUT_DEC', output_num=output_num, value_name=output_value_names))
+                    output_num += 1
+            elif(len(layer.outbound_nodes) == 0):
                 size=1
                 for s in layer.output.shape[1:]:
                     size *= s if s is not None else 1
@@ -1054,31 +1086,10 @@ def generate_model(model, x_test, per_channel_quant=False, name='weights.h', for
                 raise Exception('unsupported layer', layer.name, layer)
 
             # test, multiple output layer (not yet working with multiple outputs)
-            if(len(layer.outbound_nodes) == 0):
+            if hasattr(layer, "outbound_nodes") and (len(layer.outbound_nodes) == 0):
                 fp.write('\tlayer[{0}] = model.hook(output_s(&{1}_config), layer[{2}]);\n'.format(id + 1, 'output'+str(output_num), LI[inp][0] + 1))
                 output_num -=1 # the num is inverted in keras, not a good solution yet.
-
-            """
-            # temporary fixed for activations attached into layers in construction
-            def is_activation_attached(layer):
-                if(("Softmax" in layer.output.name and "softmax" not in layer.name)or
-                ("Relu" in layer.output.name and "re_lu" not in layer.name) or
-                ("Sigmoid" in layer.output.name and "sigmoid" not in layer.name) or
-                ("Tanh" in layer.output.name and "tanh" not in layer.name)):
-                    return True
-                return False
-            if "input" not in layer.name and is_activation_attached(layer):
-                inp = layer.output.name.replace(':', '/').split('/')[0]
-                cfg = layer.get_config()
-                if(cfg['activation'] == 'relu'):
-                    fp.write('\tlayer[%s] = model.active(act_relu(), layer[%s]);\n'%(id, LI[inp][0]))
-                if(cfg['activation'] == 'tanh'):
-                    fp.write('\tlayer[%s] = model.active(act_tanh(%s_OUTPUT_SHIFT), layer[%s]);\n'%(id, inp.upper(), LI[inp][0]))
-                if(cfg['activation'] == 'sigmoid'):
-                    fp.write('\tlayer[%s] = model.active(act_sigmoid(%s_OUTPUT_SHIFT), layer[%s]);\n'%(id, inp.upper(), LI[inp][0]))
-                elif(cfg['activation'] == 'softmax'):
-                    fp.write('\tlayer[%s] = model.hook(Softmax(), layer[%s]);\n'%(id, LI[inp][0]))
-            """
+           
         # generate final output layer
         #fp.write('\tlayer[{0}] = model.hook(output_s(&{1}_config), layer[{2}]);\n'.format(id+1, 'output', LI[inp][0]+1))
         fp.write('\tmodel_compile(&model, layer[0], layer[%s]);\n' % (id + 1))
