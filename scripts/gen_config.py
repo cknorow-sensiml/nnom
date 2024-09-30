@@ -85,6 +85,44 @@ const nnom_tensor_t <tensor_name> = {
         config = config.replace('<qtype>', 'NNOM_QTYPE_PER_TENSOR')
     return config
 
+
+
+# generate tensor by the tensor config
+def gen_input_tensor(tensor, dec_bits, tensor_value='NULL', per_axis=False):
+    config = '''
+const nnom_shape_data_t <tensor_name>_dim[] = <dim>;
+const nnom_qformat_param_t <tensor_name>_dec[] = <q_dec>;
+const nnom_qformat_param_t <tensor_name>_offset[] = <q_offset>;
+const nnom_tensor_t <tensor_name> = {
+    .p_data = (void*)<value>,
+    .dim = (nnom_shape_data_t*)<tensor_name>_dim,
+    .q_dec = (nnom_qformat_param_t*)<tensor_name>_dec,
+    .q_offset = (nnom_qformat_param_t*)<tensor_name>_offset,
+    .qtype = <qtype>,
+    .num_dim = <num_dim>,
+    .bitwidth = <bitwidth>
+};
+'''
+    # inconsistance of TF1 and TF2
+    shape = tensor_shape(tensor, True)
+    config = config.replace('<tensor_name>', convert_tensor_name(tensor))#.name.replace('/','_').split(':')[0]) #conv2d/kernel:0
+    config = config.replace('<bitwidth>', '8')
+    config = config.replace('<value>', tensor_value)
+    config = config.replace('<dim>', to_cstyle(shape))
+    config = config.replace('<num_dim>', str(len(shape)))
+    if(type(dec_bits) == str):
+        config = config.replace('<q_dec>', dec_bits)
+        config = config.replace('<q_offset>', to_cstyle([0]))
+    else:
+        config = config.replace('<q_dec>', to_cstyle(dec_bits))
+        config = config.replace('<q_offset>', to_cstyle([0]))
+    if(per_axis):
+        config = config.replace('<qtype>', 'NNOM_QTYPE_PER_AXIS')
+    else:
+        config = config.replace('<qtype>', 'NNOM_QTYPE_PER_TENSOR')
+    return config
+
+
 # create tensor by directly setting up the value
 def gen_create_tensor(tensor_name, shape, dec_bits, tensor_value='NULL', per_axis=False):
     config = '''
